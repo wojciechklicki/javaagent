@@ -1,0 +1,7 @@
+Manifest-Version: 1.0
+Premain-class: com.klicki.jagent.JavaAgent
+Can-Redefine-Classes: true
+Can-Retransform-Classes: true
+Can-Set-Native-Metod-Prefix: true
+Implementation-Title: ClassHandler
+Implementation-Version: 1.0

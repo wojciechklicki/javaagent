@@ -1,8 +1,9 @@
 #!/bin/sh
 cd ./javaagent
 javac com/klicki/jagent/*.java
-jar cvfm agent.jar manifest.txt ./com/klicki/jagent/*.class
+jar cvfm timing_agent.jar manifest.txt ./com/klicki/jagent/*.class
 cd ../example
 javac Example.java
-java -javaagent:../javaagent/agent.jar Example
+java -javaagent:../javaagent/timing_agent.jar Example
 cd ..
+cp ./javaagent/timing_agent.jar ~/shares/xsp

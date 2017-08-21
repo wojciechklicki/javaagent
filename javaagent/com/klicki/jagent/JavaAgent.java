@@ -10,14 +10,24 @@ import java.nio.file.*;
 public class JavaAgent {
 	static  long starttime = System.currentTimeMillis();
 
+	private static final String base = "C:/Users/Dysant Workstation/odk_workspace/FPA/WebContent/WEB-INF/classes"; 
+	//private static final String base = "C:/Users/Administrator/eclipse-workspace/FPA/WebContent/WEB-INF/classes";
+	
 	public static void premain(String args, Instrumentation instrumentation){
-		System.out.println("Adding timing class");
+		System.out.println("Adding class folder " + base);
+		File cbase = new File(base);
+		if(!cbase.isDirectory()){
+			System.err.println("Class folder does not exits for current application");
+			return;
+		}
+		else{
+			System.out.println("Class folder found");
+		}
 		ClassHandler tr = new ClassHandler();
 		instrumentation.addTransformer(tr);
 	}
 
 	public static class ClassHandler implements ClassFileTransformer{
-		private static final String base = "C:/Users/Dysant Workstation/odk_workspace/FPA/WebContent/WEB-INF/classes"; 
 		@Override
 		public byte[] transform(ClassLoader loader, String className, 
 					Class<?> classRedefined, ProtectionDomain pd, 

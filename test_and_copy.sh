@@ -4,4 +4,4 @@ javac "./com/ibm/domino/xsp/module/nsf/ModuleClassLoader.java"
 javac -classpath . "Example.java"
 java -javaagent:../dev-javaagent/target/dev-javaagent.jar Example
 cd ..
-#cp ./dev-javaagent/target/dev-javaagent.jar ~/shares/domino/xsp/
+cp ./dev-javaagent/target/dev-javaagent.jar ~/shares/domino/xsp/

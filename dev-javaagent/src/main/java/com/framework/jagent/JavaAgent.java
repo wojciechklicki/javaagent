@@ -1,97 +1,135 @@
 package com.framework.jagent;
 
+import static net.bytebuddy.matcher.ElementMatchers.named;
+
 import java.io.File;
-import java.util.concurrent.Callable;
-import java.lang.instrument.ClassFileTransformer;
-import java.lang.instrument.IllegalClassFormatException;
 import java.lang.instrument.Instrumentation;
-import java.security.ProtectionDomain;
+import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.security.CodeSource;
+import java.security.SecureClassLoader;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.concurrent.Callable;
+
+import org.apache.commons.io.FileUtils;
 
 import net.bytebuddy.agent.builder.AgentBuilder;
-import net.bytebuddy.asm.Advice;
 import net.bytebuddy.description.type.TypeDescription;
-import net.bytebuddy.dynamic.DynamicType;
 import net.bytebuddy.dynamic.DynamicType.Builder;
-import net.bytebuddy.implementation.FixedValue;
-import net.bytebuddy.utility.JavaModule;
 import net.bytebuddy.implementation.MethodDelegation;
+import net.bytebuddy.implementation.bind.annotation.Argument;
 import net.bytebuddy.implementation.bind.annotation.Origin;
+import net.bytebuddy.implementation.bind.annotation.RuntimeType;
 import net.bytebuddy.implementation.bind.annotation.SuperCall;
 import net.bytebuddy.implementation.bind.annotation.This;
-import net.bytebuddy.implementation.bind.annotation.RuntimeType;
-import net.bytebuddy.implementation.bind.annotation.Argument;
-import static net.bytebuddy.matcher.ElementMatchers.*;
-
+import net.bytebuddy.utility.JavaModule;
 
 public class JavaAgent {
+	private static final String CNAME_DYNAMIC_CLASS_LOADER = "com.ibm.domino.xsp.module.nsf.ModuleClassLoader$DynamicClassLoader";
+	private static final String CNAME_MODULE_CLASS_LOADER = "com.ibm.domino.xsp.module.nsf.ModuleClassLoader";
+
+	static boolean DEBUG = false;
+	
 	static long starttime = System.currentTimeMillis();
 
-	private static final String base = "C:/Users/Dysant Workstation/odk_workspace/FPA/WebContent/WEB-INF/classes";
-	// private static final String base =
-	// "C:/Users/Administrator/eclipse-workspace/FPA/WebContent/WEB-INF/classes";
+	private static Map<String, String> projectMap = new HashMap<String, String>();
 	
-	public static class SimpleHandler{
-		@RuntimeType		
-		public static Class findClass(@Argument(0) String name, @SuperCall Callable<Class> superMethod, @Origin Method origin, @This Object self) throws Exception{
-			System.out.println("Origin: " + origin);
-			System.out.println("This: " + self);
-			if(name.contains("test")){
+	public static class ClassLoaderProxy {
+		@RuntimeType
+		public static Class findClass(@Argument(0) String name, @SuperCall Callable<Class> superMethod,
+				@Origin Method origin, @This Object self) throws Exception {
+			ClassLoader cl = (ClassLoader) self;
+			boolean isDynamicClassLoader = (cl instanceof SecureClassLoader);
+			String moduleName = null;
+			if (isDynamicClassLoader) {
+				Field field = cl.getClass().getDeclaredField("this$0");
+				field.setAccessible(true);
+
+				// Dereference and cast it
+				Object moduleClassLoader = field.get(cl);
+				moduleName = getModuleName(moduleClassLoader);
+			}
+			else {
+				moduleName = getModuleName(cl);
+			}
+			if(!JavaAgent.projectMap.containsKey(moduleName)) {
+				System.out.println("No config found for project " + moduleName);
 				return superMethod.call();
 			}
-			else{
-				System.out.println("new findClass for " + name);
-				return SimpleHandler.class;
+			
+			String cpath = JavaAgent.projectMap.get(moduleName) + "/" + computeFileNameFromClassName(name) + ".class";
+			if (DEBUG) {
+				System.out.println("Searching for " + cpath);
 			}
-		}
-	}
-	
-	public static void premain(String args, Instrumentation instrumentation) {
-		System.out.println("Adding class folder: " + base);
-		File cbase = new File(base);
-		if (!cbase.isDirectory()) {
-			System.err.println("Class folder does not exits for current application");
-		} else {
-			System.out.println("Class folder found");
-		}
-		//ClassHandler tr = new ClassHandler();
-		//instrumentation.addTransformer(tr);
-		AgentBuilder ab = new AgentBuilder.Default();
-		//method delegation error logging to console
-		//ab = ab.with(AgentBuilder.Listener.StreamWriting.toSystemOut());
-		ab.type(named("com.ibm.domino.xsp.module.nsf.ModuleClassLoader"))
-			.transform(new AgentBuilder.Transformer() {
-				@Override
-					public Builder<?> transform(Builder<?> builder, TypeDescription tdesc, ClassLoader cl, JavaModule arg3) {
-						return builder.method(named("findClass")).intercept(MethodDelegation.to(SimpleHandler.class));
-					}
-		}).installOn(instrumentation);
-	}
-
-	public static class ClassHandler implements ClassFileTransformer {
-		@Override
-		public byte[] transform(ClassLoader loader, String className, Class<?> classRedefined, ProtectionDomain pd,
-				byte[] buff) throws IllegalClassFormatException {
-			double diff = (double) (System.currentTimeMillis() - JavaAgent.starttime) / 1000.0;
-			System.out.println(diff + " s > " + className);
-
-			String cpath = base + "/" + className + ".class";
-			// System.out.println("Testing: " + cpath);
 			File f = new File(cpath);
 			if (f.isFile()) {
-				// System.out.println("Reading class " + className + " from " + f);
-				try {
-					// return Files.readAllBytes(f.toPath());
-				} catch (Exception e) {
-					e.printStackTrace();
+				System.out.println("Reading class " + name + " from " + f);
+				byte[] code = FileUtils.readFileToByteArray(f);
+				if (isDynamicClassLoader) {
+					Class[] SecureDefineParams = new Class[] { String.class, byte[].class, int.class, int.class,
+							CodeSource.class };
+					Method defClass = SecureClassLoader.class.getDeclaredMethod("defineClass", SecureDefineParams);
+					defClass.setAccessible(true);
+					return (Class) defClass.invoke(cl, name, code, 0, code.length, null);
+				} else {
+					Class[] NormalDefineParams = new Class[] { String.class, byte[].class, int.class, int.class };
+					Method defClass = ClassLoader.class.getDeclaredMethod("defineClass", NormalDefineParams);
+					defClass.setAccessible(true);
+					return (Class) defClass.invoke(cl, name, code, 0, code.length);
 				}
+			} else {
+				return superMethod.call();
 			}
-
-			if (className.equals("com/ibm/domino/xsp/module/nsf/ModuleClassLoader")) {
-				System.out.println("!!!!!!!!! Module class loader found : " + loader + ", " + classRedefined);
-			}
-
-			return buff;
 		}
+
+		private static String getModuleName(Object moduleClassLoader)
+				throws NoSuchFieldException, IllegalAccessException, NoSuchMethodException, InvocationTargetException {
+			Field moduleField = moduleClassLoader.getClass().getDeclaredField("module");
+			moduleField.setAccessible(true);
+			
+			Object module = moduleField.get(moduleClassLoader);
+			Method getModuleName = module.getClass().getMethod("getModuleName");
+			String mname = (String)getModuleName.invoke(module);
+			
+			return mname;
+		}
+
+		private static String computeFileNameFromClassName(String name) {
+			return name.replace(".", "/");
+		}
+	}
+
+	public static void premain(String args, Instrumentation instrumentation) {
+		if (args == null) {
+			System.err.println("No base folder found in args");
+			return;
+		}
+		for(String pconf : args.split(";")) {
+			if(!pconf.contains("=")) {
+				System.err.println("Wrong config: " + pconf);
+				continue;
+			}
+			String[] confTab = pconf.split("=");
+			JavaAgent.projectMap.put(confTab[0], confTab[1]);
+		}
+		
+		System.out.println("Adding class folders: " + JavaAgent.projectMap);
+
+		AgentBuilder ab = new AgentBuilder.Default();
+		if (DEBUG) {
+			// method delegation error logging to console
+			ab = ab.with(AgentBuilder.Listener.StreamWriting.toSystemOut());
+		}
+		ab.type(named(CNAME_MODULE_CLASS_LOADER).or(named(CNAME_DYNAMIC_CLASS_LOADER)))
+				.transform(new AgentBuilder.Transformer() {
+					@Override
+					public Builder<?> transform(Builder<?> builder, TypeDescription tdesc, ClassLoader cl,
+							JavaModule arg3) {
+						return builder.method(named("findClass"))
+								.intercept(MethodDelegation.to(ClassLoaderProxy.class));
+					}
+				}).installOn(instrumentation);
 	}
 }

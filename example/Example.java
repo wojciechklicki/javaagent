@@ -10,5 +10,8 @@ public class Example {
 		Class cls2 = m.findClass("some.class");
 		System.out.println("Class found: " + cls2);
 		System.out.println("Classloader: " + cls2.getClassLoader());
+		Class cls3 = m.findClass("com.framework.commons.UIConfiguration");
+		System.out.println("Class found: " + cls3);
+		System.out.println("Classloader: " + cls3.getClassLoader());
 	}
 }

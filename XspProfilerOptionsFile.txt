@@ -1,0 +1,1 @@
+-Xbootclasspath/p:C:/IBM/Domino/xsp/JAR_NAME -javaagent:C:/IBM/Domino/xsp/JAR_NAME="C:/Users/Dysant Workstation/odk_workspace" -javaagent:C:/IBM/Domino/xsp/XPagesProfilerAgent.jar -Xverify:none -Dcom.sun.management.jmxremote.port=9003 -Dcom.sun.management.jmxremote.ssl=false -Dcom.sun.management.jmxremote.authenticate=false

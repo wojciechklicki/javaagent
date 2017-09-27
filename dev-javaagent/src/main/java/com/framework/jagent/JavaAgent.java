@@ -17,6 +17,7 @@ import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Vector;
 import java.util.concurrent.Callable;
 
 import org.apache.commons.io.FileUtils;
@@ -62,12 +63,34 @@ public class JavaAgent {
 		return name.replace(".", "/");
 	}
 	
-	public static class ClassLoaderProxy {		
+	public static class ClassLoaderProxy {	
 		@RuntimeType
 		public static Object getResources(@Argument(0) String name, @SuperCall Callable<Class<?>> superMethod,
 				@Origin Method origin, @This Object self) throws Exception {
-			System.out.println("!!! getResources: " + name);
-			return superMethod.call();
+			System.out.println("getResources: " + name);
+			ClassLoader cl = (ClassLoader) self;
+			boolean isDynamicClassLoader = (cl instanceof SecureClassLoader);
+			String moduleName = computeModuleName(cl, isDynamicClassLoader);
+			
+			if(!JavaAgent.projectsClassFoldersByDb.containsKey(moduleName)) {
+				if(DEBUG) {
+					System.out.println("No config found for project " + moduleName);
+				}
+				return superMethod.call();
+			}
+			
+			File f = findProjectFile(JavaAgent.projectsClassFoldersByDb.get(moduleName), name);
+			if (f != null) {
+				System.out.println("Reading resource url " + name + " from " + f);
+				Vector<URL> res = new Vector<URL>();
+				for(File cf: f.listFiles()) {
+					res.addElement(cf.toURI().toURL());
+				}
+				Enumeration<URL> en = res.elements();
+				return en;
+			} else {
+				return superMethod.call();
+			}
 		}
 		
 		@RuntimeType
@@ -195,7 +218,7 @@ public class JavaAgent {
 		}
 		
 		WorkspaceScanner ws = new WorkspaceScanner();
-		
+		 
 		try {
 			JavaAgent.projects = ws.searchForProjects(args);
 		} catch (IOException e) {
@@ -213,6 +236,10 @@ public class JavaAgent {
 				String cf = project.getClassFolderPath();
 				System.out.println("Adding class folder " + cf);
 				list.add(cf);
+				for(String resPath :project.getResourcesPaths()) {
+					System.out.println("Adding resource path");
+					list.add(resPath);
+				}
 			}
 		}
 		
@@ -226,7 +253,10 @@ public class JavaAgent {
 					@Override
 					public Builder<?> transform(Builder<?> builder, TypeDescription tdesc, ClassLoader cl,
 							JavaModule arg3) {
-						return builder.method(named("findClass").or(named("getResource").or(named("getResources")).or(named("getResourceAsStream"))))
+						return builder.method(named("findClass")
+								.or(named("getResource")
+								.or(named("getResources"))
+								.or(named("getResourceAsStream"))))
 								.intercept(MethodDelegation.to(ClassLoaderProxy.class));
 					}
 				}).installOn(instrumentation);

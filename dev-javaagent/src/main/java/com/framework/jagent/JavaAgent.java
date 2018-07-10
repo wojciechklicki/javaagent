@@ -1,6 +1,7 @@
 package com.framework.jagent;
 
 import static net.bytebuddy.matcher.ElementMatchers.named;
+import net.bytebuddy.matcher.ElementMatchers;
 
 import java.io.File;
 import java.io.IOException;
@@ -32,6 +33,8 @@ import net.bytebuddy.implementation.bind.annotation.RuntimeType;
 import net.bytebuddy.implementation.bind.annotation.SuperCall;
 import net.bytebuddy.implementation.bind.annotation.This;
 import net.bytebuddy.utility.JavaModule;
+import net.bytebuddy.asm.Advice;
+
 
 import com.framework.WorkspaceScanner;
 
@@ -39,7 +42,7 @@ public class JavaAgent {
 	private static final String CNAME_DYNAMIC_CLASS_LOADER = "com.ibm.domino.xsp.module.nsf.ModuleClassLoader$DynamicClassLoader";
 	private static final String CNAME_MODULE_CLASS_LOADER = "com.ibm.domino.xsp.module.nsf.ModuleClassLoader";
 
-	static boolean DEBUG = false;
+	public static boolean DEBUG = false;
 	
 	static long starttime = System.currentTimeMillis();
 	private static List<WorkspaceScanner.Project> projects = Collections.emptyList();
@@ -62,15 +65,29 @@ public class JavaAgent {
 	private static String computeFileNameFromClassName(String name) {
 		return name.replace(".", "/");
 	}
-	
+
+	public static class TimerAdvice {
+	  	@Advice.OnMethodEnter
+	    static long enter() {
+			return System.currentTimeMillis();
+		}
+
+		@Advice.OnMethodExit()
+		static void exit(@Advice.Origin String method, @Advice.Enter long start) {
+			System.out.println(method + " took " + (System.currentTimeMillis() - start));
+		}
+	}
+
+
 	public static class ClassLoaderProxy {	
 		@RuntimeType
 		public static Object getResources(@Argument(0) String name, @SuperCall Callable<Class<?>> superMethod,
 				@Origin Method origin, @This Object self) throws Exception {
-			System.out.println("getResources: " + name);
+			// System.out.println("getResources: " + name);
 			ClassLoader cl = (ClassLoader) self;
 			boolean isDynamicClassLoader = (cl instanceof SecureClassLoader);
 			String moduleName = computeModuleName(cl, isDynamicClassLoader);
+			
 			
 			if(!JavaAgent.projectsClassFoldersByDb.containsKey(moduleName)) {
 				if(DEBUG) {
@@ -81,7 +98,7 @@ public class JavaAgent {
 			
 			File f = findProjectFile(JavaAgent.projectsClassFoldersByDb.get(moduleName), name);
 			if (f != null) {
-				System.out.println("Reading resource url " + name + " from " + f);
+				// System.out.println("Reading resource url " + name + " from " + f);
 				Vector<URL> res = new Vector<URL>();
 				for(File cf: f.listFiles()) {
 					res.addElement(cf.toURI().toURL());
@@ -96,7 +113,7 @@ public class JavaAgent {
 		@RuntimeType
 		public static Object getResource(@Argument(0) String name, @SuperCall Callable<Class<?>> superMethod,
 				@Origin Method origin, @This Object self) throws Exception {
-			System.out.println("getResource for project: " + name);
+			// System.out.println("getResource for project: " + name);
 			ClassLoader cl = (ClassLoader) self;
 			boolean isDynamicClassLoader = (cl instanceof SecureClassLoader);
 			String moduleName = computeModuleName(cl, isDynamicClassLoader);
@@ -110,7 +127,7 @@ public class JavaAgent {
 			
 			File f = findProjectFile(JavaAgent.projectsClassFoldersByDb.get(moduleName), name);
 			if (f != null) {
-				System.out.println("Reading resource url " + name + " from " + f);
+				// System.out.println("Reading resource url " + name + " from " + f);
 				return f.toURI().toURL();
 			} else {
 				return superMethod.call();
@@ -120,7 +137,7 @@ public class JavaAgent {
 		@RuntimeType
 		public static Object getResourceAsStream(@Argument(0) String name, @SuperCall Callable<Class<?>> superMethod,
 				@Origin Method origin, @This Object self) throws Exception {
-			System.out.println("getResourceAsStream for project: " + name);
+			// System.out.println("getResourceAsStream for project: " + name);
 			ClassLoader cl = (ClassLoader) self;
 			boolean isDynamicClassLoader = (cl instanceof SecureClassLoader);
 			String moduleName = computeModuleName(cl, isDynamicClassLoader);
@@ -134,7 +151,7 @@ public class JavaAgent {
 			
 			File f = findProjectFile(JavaAgent.projectsClassFoldersByDb.get(moduleName), name);
 			if (f != null) {
-				System.out.println("Reading resource url " + name + " from " + f);
+				// System.out.println("Reading resource url " + name + " from " + f);
 				return f.toURI().toURL().openStream();
 			} else {
 				return superMethod.call();
@@ -147,6 +164,16 @@ public class JavaAgent {
 			ClassLoader cl = (ClassLoader) self;
 			boolean isDynamicClassLoader = (cl instanceof SecureClassLoader);
 			String moduleName = computeModuleName(cl, isDynamicClassLoader);
+
+			if(name.equals("@isDevMode")){
+				if(JavaAgent.projectsClassFoldersByDb.containsKey(moduleName)){
+					return Boolean.class;
+				}
+				else{
+					return null;
+				}
+			}
+
 			if(!JavaAgent.projectsClassFoldersByDb.containsKey(moduleName)) {
 				if(DEBUG) {
 					System.out.println("No config found for project " + moduleName);
@@ -156,7 +183,7 @@ public class JavaAgent {
 			
 			File f = findProjectFile(JavaAgent.projectsClassFoldersByDb.get(moduleName), computeFileNameFromClassName(name) + ".class");
 			if (f != null) {
-				System.out.println("Reading class " + name + " from " + f);
+				// System.out.println("Reading class " + name + " from " + f);
 				byte[] code = FileUtils.readFileToByteArray(f);
 				if (isDynamicClassLoader) {
 					Class<?>[] SecureDefineParams = new Class<?>[] { String.class, byte[].class, int.class, int.class,
@@ -208,6 +235,7 @@ public class JavaAgent {
 	private static final String DEBUG_PREFIX = "debug;";
 	
 	public static void premain(String args, Instrumentation instrumentation) {
+		System.out.println("Premain - java agent running");
 		if (args == null) {
 			System.err.println("No workspace folder found in args");
 			return;
@@ -248,6 +276,17 @@ public class JavaAgent {
 			// method delegation error logging to console
 			ab = ab.with(AgentBuilder.Listener.StreamWriting.toSystemOut());
 		}
+		
+		ab.type(ElementMatchers.nameEndsWith("NotesContext"))
+				.transform(new AgentBuilder.Transformer() {
+					@Override
+					public Builder<?> transform(Builder<?> builder, TypeDescription tdesc, ClassLoader cl,
+								JavaModule arg3){
+						      return builder.visit(Advice.to(TimerAdvice.class).on(ElementMatchers.named("verifySignature")));
+					}
+				});
+
+		
 		ab.type(named(CNAME_MODULE_CLASS_LOADER).or(named(CNAME_DYNAMIC_CLASS_LOADER)))
 				.transform(new AgentBuilder.Transformer() {
 					@Override

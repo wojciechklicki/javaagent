@@ -1,0 +1,11 @@
+Manifest-Version: 1.0
+Implementation-Title: ClassHandler
+Can-Set-Native-Metod-Prefix: true
+Premain-class: com.framework.jagent.JavaAgent
+Implementation-Version: 1.0
+Built-By: wklicki
+Can-Redefine-Classes: true
+Can-Retransform-Classes: true
+Build-Jdk: 1.8.0_121
+Created-By: Maven Integration for Eclipse
+

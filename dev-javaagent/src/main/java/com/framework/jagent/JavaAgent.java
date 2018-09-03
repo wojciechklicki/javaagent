@@ -21,8 +21,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Vector;
 import java.util.concurrent.Callable;
+import java.util.Arrays;
 
 import java.io.InputStream;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.io.IOUtils;
@@ -31,6 +34,8 @@ import net.bytebuddy.agent.builder.AgentBuilder;
 import net.bytebuddy.description.type.TypeDescription;
 import net.bytebuddy.dynamic.DynamicType.Builder;
 import net.bytebuddy.implementation.MethodDelegation;
+
+import net.bytebuddy.implementation.bind.annotation.AllArguments;
 import net.bytebuddy.implementation.bind.annotation.Argument;
 import net.bytebuddy.implementation.bind.annotation.Origin;
 import net.bytebuddy.implementation.bind.annotation.RuntimeType;
@@ -147,6 +152,10 @@ public class JavaAgent {
 		public File getFile(){
 			return new File(this.filePath);
 		}
+
+		public String getFilePath(){
+			return this.filePath;
+		}
 		
 		public InputStream getStream(){
 			try{
@@ -196,6 +205,9 @@ public class JavaAgent {
 		}
 
 		private ProjectFile findProjectFile(String fname) {
+			if(fname.startsWith("/WEB-INF/themes/")){
+				fname = fname.replace("/WEB-INF/themes/", "");
+			}
 			for(String cfolder: this.classPaths) {
 				String cpath = cfolder + "/" + fname;
 				if (DEBUG) {
@@ -203,6 +215,9 @@ public class JavaAgent {
 				}
 				File f = new File(cpath);
 				if(f.exists()) {
+					if (DEBUG) {
+						System.out.println("Found: " + cpath);
+					}
 					return new ProjectFile(f);
 				}
 			}
@@ -212,6 +227,9 @@ public class JavaAgent {
 				}
 			}
 
+			if (DEBUG) {
+				System.out.println("Not Found: " + fname);
+			}
 			return null;
 		}
 
@@ -239,6 +257,170 @@ public class JavaAgent {
 		}
 	}
 
+	private static ThreadLocal<String> moduleNameCache = new ThreadLocal<String>();
+
+	public static class RuntimeFileSystemProxy{
+		private static String normalizePath(String path) {
+			if (path.startsWith("/")) {
+				path = path.substring(1);
+			}
+
+			if (path.endsWith("/")) {
+				path = path.substring(0, path.length() - 1);
+			}
+
+			return path;
+		}
+
+		@RuntimeType
+		public static void refresh(@Argument(0) Object db, @SuperCall Callable<Class<?>> superMethod,
+				@Origin Method origin, @This Object self) throws Exception {
+		
+				System.out.println("Refreshing file system for : " + db);
+
+				try{
+					Method moduleNameMethod = db.getClass().getMethod("getDatabasePath");
+					Object res = moduleNameMethod.invoke(db);
+					if(res != null){
+						String moduleName = res.toString(); 
+						moduleNameCache.set(moduleName);
+
+						System.out.println("Module name set: " + moduleName);
+					}
+					else{
+						
+						System.out.println("Empty NotesDatabase");
+					}
+				}
+				catch(Exception e){
+					e.printStackTrace();
+				}
+		}
+
+		@RuntimeType	
+		public static Object listResources(@Argument(0) String path, @SuperCall Callable<Class<?>> superMethod,
+				@Origin Method origin, @This Object self) throws Exception {
+		
+				String moduleName = moduleNameCache.get();
+				System.out.println("Listing resources: " + path + " for module " + moduleName) ;
+
+				path = normalizePath(path);
+				ProjectFile f = JavaAgent.projectResources.get(moduleName).findProjectFile(path);
+				if(f != null){	
+					HashSet<String> res = new HashSet<String>();
+					for(File cf: f.getFile().listFiles()) {
+						Path base = Paths.get(f.getFilePath());
+						Path resPath = cf.toPath();
+						Path rel = base.relativize(resPath);
+						res.add(rel.toString());
+					}
+
+					System.out.println("pathForServlets results: " + res);
+					return res;
+				}
+				else{
+					System.out.println("Path not found: " + path);
+				}
+				return null;
+		}
+
+		@RuntimeType
+		public static Object listPathForServlets(@Argument(0) String path, @SuperCall Callable<Class<?>> superMethod,
+				@Origin Method origin, @This Object self) throws Exception {
+				System.out.println("Listing paths for servlets : " + path);
+				path = normalizePath(path);	
+				System.out.println("Listing paths for servlets (normalized): " + path);
+				String clName = self.getClass().getClassLoader().getClass().getName();
+
+				String moduleName = "";
+				
+				if(moduleNameCache.get() != null){
+					moduleName = moduleNameCache.get();
+				}
+				else{
+					//UWAGA: zakładamy że ta metoda nie jest uruchamiana jako pierwsza (wczesnej jest uruchamiany getFileContent)
+
+					System.out.println("Error: Module name not found");
+					
+					return superMethod.call();
+				}
+
+
+				ProjectFile f = JavaAgent.projectResources.get(moduleName).findProjectFile(path);
+				if(f != null){	
+					HashSet<String> res = new HashSet<String>();
+					for(File cf: f.getFile().listFiles()) {
+						Path base = Paths.get(f.getFilePath());
+						Path resPath = cf.toPath();
+						Path rel = base.relativize(resPath);
+						res.add(rel.toString());
+					}
+
+					System.out.println("pathForServlets results: " + res);
+					return res;
+				}
+				else{
+					System.out.println("Path not found: " + path);
+				}
+				return null;
+		}
+		
+		@RuntimeType
+		public static Object getFileContent(@AllArguments Object [] args, @SuperCall Callable<Class<?>> superMethod,	
+				@Origin Method origin, @This Object self) throws Exception {
+				
+				if(DEBUG){
+					System.out.println("getFileContent " + Arrays.toString(args));
+				}
+				String clName = self.getClass().getClassLoader().getClass().getName();
+
+				String moduleName = "";
+				
+				if(moduleNameCache.get() != null){
+					moduleName = moduleNameCache.get();
+				}
+				else{
+					try{
+						Method moduleNameMethod = args[0].getClass().getMethod("getDatabasePath");
+						Object res = moduleNameMethod.invoke(args[0]).toString();
+						moduleName = res.toString(); 
+						moduleNameCache.set(moduleName);
+					}
+					catch(Exception e){
+						e.printStackTrace();
+					}
+				}
+
+				String name = null;
+
+				try{
+				if(args[1] instanceof String){
+					name = args[1].toString();
+				}
+				else{
+					Method m = args[1].getClass().getMethod("getPath");
+					name = m.invoke(args[1]).toString();
+				}
+				}
+				catch(Exception e){
+					e.printStackTrace();
+				}
+				name = normalizePath(name);
+
+				ProjectFile f = JavaAgent.projectResources.get(moduleName).findProjectFile(name);
+				if(f != null){
+					if(args.length == 3){
+						IOUtils.copy(f.getStream(), (java.io.OutputStream)args[2]);
+						return null;
+					}
+					else{
+						return f.getStream();	
+					}
+				}
+
+				return null;
+		}
+	}
 
 	public static class ClassLoaderProxy {	
 		@RuntimeType
@@ -447,8 +629,10 @@ public class JavaAgent {
 			}
 		}
 
-		private static String computeModuleName(ClassLoader cl, boolean isDynamicClassLoader)
-				throws NoSuchFieldException, IllegalAccessException, NoSuchMethodException, InvocationTargetException {
+	}
+
+	static String computeModuleName(ClassLoader cl, boolean isDynamicClassLoader)
+			throws NoSuchFieldException, IllegalAccessException, NoSuchMethodException, InvocationTargetException {
 			String moduleName = null;
 			if (isDynamicClassLoader) {
 				Field field = cl.getClass().getDeclaredField("this$0");
@@ -462,19 +646,18 @@ public class JavaAgent {
 				moduleName = getModuleName(cl);
 			}
 			return moduleName;
-		}
-		
-		private static String getModuleName(Object moduleClassLoader)
-				throws NoSuchFieldException, IllegalAccessException, NoSuchMethodException, InvocationTargetException {
+	}
+
+	static String getModuleName(Object moduleClassLoader)
+			throws NoSuchFieldException, IllegalAccessException, NoSuchMethodException, InvocationTargetException {
 			Field moduleField = moduleClassLoader.getClass().getDeclaredField("module");
 			moduleField.setAccessible(true);
-			
+
 			Object module = moduleField.get(moduleClassLoader);
 			Method getModuleName = module.getClass().getMethod("getModuleName");
 			String mname = (String)getModuleName.invoke(module);
-			
+
 			return mname;
-		}
 	}
 
 	private static final String DEBUG_PREFIX = "debug;";
@@ -526,28 +709,26 @@ public class JavaAgent {
 			ab = ab.with(AgentBuilder.Listener.StreamWriting.toSystemOut());
 		}
 		
-		/*
-		ab.type(ElementMatchers.nameEndsWith("NotesContext"))
+		
+		ab.type(named("com.ibm.domino.xsp.module.nsf.RuntimeFileSystem"))
 				.transform(new AgentBuilder.Transformer() {
 					@Override
 					public Builder<?> transform(Builder<?> builder, TypeDescription tdesc, ClassLoader cl,
 								JavaModule arg3){
-						      return builder.visit(Advice.to(TimerAdvice.class).on(ElementMatchers.named("verifySignature")));
+						return builder.method(named("getFileContent").or(named("listPathForServlets").or(named("refresh").or(named("listResources")))))
+								.intercept(MethodDelegation.to(RuntimeFileSystemProxy.class));
 					}
-				});
-		*/
-		
-		ab.type(named(CNAME_MODULE_CLASS_LOADER).or(named(CNAME_DYNAMIC_CLASS_LOADER).or(named("com.ibm.domino.xsp.module.nsf.NotesContext"))))
+				}).type(named(CNAME_MODULE_CLASS_LOADER).or(named(CNAME_DYNAMIC_CLASS_LOADER).or(named("com.ibm.domino.xsp.module.nsf.NotesContext"))))
 				.transform(new AgentBuilder.Transformer() {
 					@Override
 					public Builder<?> transform(Builder<?> builder, TypeDescription tdesc, ClassLoader cl,
 							JavaModule arg3) {
 						return builder.method(named("findClass")
-//						return builder.method(named("loadClass")
 								.or(named("getResource")
 								.or(named("resetDynamicClassLoader"))
 								.or(named("getResources"))
 								.or(named("verifySignature"))
+
 								.or(named("setSignerSessionRights"))
 								.or(named("getResourceAsStream"))))
 								.intercept(MethodDelegation.to(ClassLoaderProxy.class));
